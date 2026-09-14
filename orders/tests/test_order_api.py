@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -13,6 +15,7 @@ from rest_framework.test import APIClient
 from orders.models import (
     Category,
     Order,
+    OrderItem,
     Product,
     PromoCode,
     PromoCodeRedemption,
@@ -262,3 +265,31 @@ class CreateOrderApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["user_id"][0]["code"], "user_not_found")
+
+    def test_rounds_each_discounted_line_half_up_before_summing(self) -> None:
+        self.keyboard.price = Decimal("0.05")
+        self.keyboard.save()
+        promo = self.promo()
+        payload = self.payload(promo_code=promo.code)
+        payload["goods"][0]["quantity"] = 3
+        response = self.client.post(self.url, payload, format="json")
+        self.assertEqual(response.status_code, 201)
+        # 0.05 * 3 * 0.9 = 0.135, rounded per line, not per unit.
+        self.assertEqual(Order.objects.get().total, Decimal("0.14"))
+        self.assertEqual(OrderItem.objects.get().total, Decimal("0.14"))
+
+    def test_database_failure_rolls_back_order_items_and_redemption(self) -> None:
+        promo = self.promo()
+        with (
+            patch(
+                "orders.services.PromoCodeRedemption.objects.create",
+                side_effect=IntegrityError("simulated database failure"),
+            ),
+            self.assertRaises(IntegrityError),
+        ):
+            self.client.post(
+                self.url, self.payload(promo_code=promo.code), format="json"
+            )
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(OrderItem.objects.count(), 0)
+        self.assertEqual(PromoCodeRedemption.objects.count(), 0)

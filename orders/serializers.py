@@ -4,16 +4,17 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from .limits import MAX_PRODUCT_ID, MAX_USER_ID
 from .models import Order, OrderItem
 
 
 class OrderLineInputSerializer(serializers.Serializer):
-    good_id = serializers.IntegerField(min_value=1)
+    good_id = serializers.IntegerField(min_value=1, max_value=MAX_PRODUCT_ID)
     quantity = serializers.IntegerField(min_value=1, max_value=1_000_000)
 
 
 class CreateOrderSerializer(serializers.Serializer):
-    user_id = serializers.IntegerField(min_value=1)
+    user_id = serializers.IntegerField(min_value=1, max_value=MAX_USER_ID)
     goods = OrderLineInputSerializer(many=True, allow_empty=False)
     promo_code = serializers.CharField(
         required=False, allow_blank=False, max_length=64, trim_whitespace=True

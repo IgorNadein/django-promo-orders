@@ -1,4 +1,4 @@
-.PHONY: install migrate seed run test lint typecheck check
+.PHONY: install migrate seed run test lint typecheck format-check django-check check
 
 install:
 	uv sync --dev
@@ -21,4 +21,11 @@ lint:
 typecheck:
 	uv run mypy config orders
 
-check: lint typecheck test
+format-check:
+	uv run ruff format --check .
+
+django-check:
+	uv run python manage.py check
+	uv run python manage.py makemigrations --check --dry-run
+
+check: lint format-check typecheck test django-check

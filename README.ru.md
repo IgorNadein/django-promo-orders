@@ -28,7 +28,7 @@
 | Данные | PostgreSQL в Docker; SQLite для локального запуска без настройки |
 | Согласованность | `transaction.atomic()`, `select_for_update()`, ограничения БД |
 | Деньги | `Decimal`, явное округление до копеек, исторические снимки цен |
-| Качество | 16 тестов, Ruff, mypy, Django system checks, GitHub Actions |
+| Качество | 26 тестов на PostgreSQL, Ruff, mypy, Django system checks, GitHub Actions |
 | Запуск | Docker Compose, PostgreSQL 17, Gunicorn |
 
 ## Бизнес-правила
@@ -70,7 +70,7 @@ sequenceDiagram
 Требуются Python 3.10 или новее и [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --dev
+uv sync --dev --locked
 uv run python manage.py migrate
 uv run python manage.py seed_demo
 uv run python manage.py runserver
@@ -202,7 +202,29 @@ uv run mypy config orders
 uv run pytest
 ```
 
-GitHub Actions выполняет те же проверки на Python 3.10 и 3.12.
+GitHub Actions выполняет проверки на Python 3.10 и 3.12 с SQLite и полный набор тестов на PostgreSQL 17. Три теста с независимыми соединениями и настоящими транзакциями проверяют последнее применение промокода, повторное применение одним пользователем и пересекающиеся блокировки товаров. На SQLite они явно пропускаются. `make check` также запускает системные проверки Django и проверку актуальности миграций.
+
+## Числовые границы и транзакции
+
+Денежные значения округляются для каждой позиции через `ROUND_HALF_UP`; итог заказа
+складывается из округлённых итогов позиций. Округление каждой единицы товара не применяется.
+Сумма до скидки выше `999999999999.99` возвращает HTTP 400 с кодом
+`order_total_too_large` до сохранения заказа, позиций и использования промокода.
+Слишком большие ID пользователя и товара отклоняются валидацией. Неожиданный сбой
+записи в базу откатывает всю операцию.
+
+Товары блокируются в порядке первичного ключа, чтобы пересекающиеся корзины не
+захватывали их в противоположном порядке. SQLite остаётся вариантом локальной разработки;
+конкурентная запись и поведение блокировок проверяются на PostgreSQL.
+
+Полный набор тестов на отдельном экземпляре PostgreSQL:
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432 POSTGRES_DB=promo_orders \
+POSTGRES_USER=promo_orders POSTGRES_PASSWORD=promo_orders uv run pytest
+```
+
+Роли базы нужно право создать временную тестовую БД.
 
 ## Допущения
 

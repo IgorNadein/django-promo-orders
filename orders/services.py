@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
+from .limits import MAX_MONEY
 from .models import Order, OrderItem, Product, PromoCode, PromoCodeRedemption
 
 MONEY_STEP = Decimal("0.01")
@@ -82,11 +83,7 @@ def create_order(
         ) from exc
 
     product_ids = [line.product_id for line in lines]
-    products = (
-        Product.objects.select_for_update()
-        .select_related("category")
-        .in_bulk(product_ids)
-    )
+    products = Product.objects.select_for_update().order_by("pk").in_bulk(product_ids)
     missing_ids = sorted(set(product_ids) - products.keys())
     if missing_ids:
         values = ", ".join(str(product_id) for product_id in missing_ids)
@@ -119,6 +116,12 @@ def create_order(
         discounted_item_found = discounted_item_found or eligible
         subtotal += line_subtotal
         total += line_total
+        if subtotal > MAX_MONEY:
+            raise OrderCreationError(
+                "goods",
+                "Сумма заказа превышает допустимый предел.",
+                code="order_total_too_large",
+            )
         item_values.append(
             {
                 "product": product,

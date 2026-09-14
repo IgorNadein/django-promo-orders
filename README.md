@@ -28,7 +28,7 @@ constraints protect the business rules under concurrent requests.
 | Data | PostgreSQL in Docker; SQLite for zero-configuration local use |
 | Consistency | `transaction.atomic()`, `select_for_update()`, database constraints |
 | Money | `Decimal`, explicit cent rounding, historical price snapshots |
-| Quality | 16 tests, Ruff, mypy, Django system checks, GitHub Actions |
+| Quality | 26 tests on PostgreSQL, Ruff, mypy, Django system checks, GitHub Actions |
 | Runtime | Docker Compose, PostgreSQL 17, Gunicorn |
 
 ## Business rules
@@ -70,7 +70,7 @@ sequenceDiagram
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required.
 
 ```bash
-uv sync --dev
+uv sync --dev --locked
 uv run python manage.py migrate
 uv run python manage.py seed_demo
 uv run python manage.py runserver
@@ -199,7 +199,28 @@ uv run mypy config orders
 uv run pytest
 ```
 
-GitHub Actions executes the same checks on Python 3.10 and 3.12.
+GitHub Actions runs these checks on Python 3.10 and 3.12 with SQLite, plus the full suite on PostgreSQL 17. Three concurrency tests use independent connections and real transactions: the last promo use, same-user reuse and overlapping product locks. They are explicitly skipped on SQLite. `make check` also runs Django system and migration drift checks.
+
+## Numeric boundaries and transactions
+
+Money is rounded per order line using `ROUND_HALF_UP`; the order total is the sum
+of rounded line totals. Unit-level rounding is not used. A subtotal above
+`999999999999.99` returns HTTP 400 with code `order_total_too_large`, before any
+order, item or promo redemption is saved. Oversized user/product IDs are rejected
+by input validation. An unexpected write failure rolls back the whole operation.
+
+Product rows are locked in primary-key order, avoiding reversed lock acquisition
+for overlapping carts. SQLite remains a local development option; concurrent
+writers and locking semantics are validated on PostgreSQL.
+
+Run the full test suite against a disposable PostgreSQL instance:
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432 POSTGRES_DB=promo_orders \
+POSTGRES_USER=promo_orders POSTGRES_PASSWORD=promo_orders uv run pytest
+```
+
+The database role needs permission to create the temporary test database.
 
 ## Assumptions
 
