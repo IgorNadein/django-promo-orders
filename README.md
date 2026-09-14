@@ -1,23 +1,68 @@
-# Promo Orders API
+<div align="center">
 
-A production-style Django REST Framework endpoint for creating an order with an
-optional percentage promo code.
+# Django Promo Orders
 
-## Requirements covered
+**A transaction-safe REST API for creating orders and redeeming percentage promo codes.**
 
-- validates users, products, quantities and duplicate product lines;
-- rejects missing, inactive, future or expired promo codes;
-- enforces a global redemption limit;
-- allows each user to redeem a promo code only once;
-- supports promo codes limited to one product category;
-- never discounts products marked as excluded from promotions;
-- calculates money with `Decimal` and stores immutable price/discount snapshots;
-- protects promo redemption with a database transaction, a locked promo row and
-  a unique database constraint;
-- returns the response shape specified in the assignment.
-- runs linting, type checks and tests for Python 3.10 and 3.12 in GitHub Actions.
+[![CI](https://github.com/IgorNadein/django-promo-orders/actions/workflows/ci.yml/badge.svg)](https://github.com/IgorNadein/django-promo-orders/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white)](https://www.djangoproject.com/)
+[![DRF](https://img.shields.io/badge/DRF-3.16-A30000)](https://www.django-rest-framework.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Local setup with SQLite
+</div>
+
+The service implements the complete order creation flow: it validates the request,
+captures immutable price snapshots, calculates discounts with `Decimal`, and
+atomically reserves a promo redemption. PostgreSQL row locking and database
+constraints protect the business rules under concurrent requests.
+
+## At a glance
+
+| Area | Implementation |
+|---|---|
+| API | Django REST Framework, `POST /api/orders/` |
+| Data | PostgreSQL in Docker; SQLite for zero-configuration local use |
+| Consistency | `transaction.atomic()`, `select_for_update()`, database constraints |
+| Money | `Decimal`, explicit cent rounding, historical price snapshots |
+| Quality | 16 tests, Ruff, mypy, Django system checks, GitHub Actions |
+| Runtime | Docker Compose, PostgreSQL 17, Gunicorn |
+
+## Business rules
+
+- The promo code must exist, be enabled, and be inside its validity window.
+- The global redemption limit must not be exhausted.
+- A user can redeem a promo code only once.
+- A category-limited promo discounts matching products only.
+- Products excluded from promotions always retain their full price.
+- A supplied promo must apply to at least one item.
+- Duplicate product lines and invalid quantities are rejected.
+
+## Request flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as DRF endpoint
+    participant S as Order service
+    participant DB as PostgreSQL
+
+    C->>API: POST /api/orders/
+    API->>API: Validate request shape
+    API->>S: create_order(...)
+    S->>DB: BEGIN
+    S->>DB: Lock user, products and promo
+    S->>DB: Check validity and redemption limits
+    S->>S: Calculate item totals with Decimal
+    S->>DB: Create order, items and redemption
+    S->>DB: COMMIT
+    S-->>API: Order with price snapshots
+    API-->>C: 201 Created
+```
+
+## Quick start
+
+### SQLite
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required.
 
@@ -28,7 +73,19 @@ uv run python manage.py seed_demo
 uv run python manage.py runserver
 ```
 
-The API is available at `POST http://127.0.0.1:8000/api/orders/`.
+The endpoint is available at `http://127.0.0.1:8000/api/orders/`.
+
+### PostgreSQL and Docker
+
+```bash
+docker compose up --build --wait
+docker compose exec web python manage.py seed_demo
+```
+
+The container is exposed at `http://127.0.0.1:8015` by default. Set
+`APP_PORT=8000` or another free port to override it.
+
+## API example
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/orders/ \
@@ -39,8 +96,6 @@ curl -X POST http://127.0.0.1:8000/api/orders/ \
     "promo_code": "SUMMER2025"
   }'
 ```
-
-Example response:
 
 ```json
 {
@@ -63,74 +118,93 @@ Example response:
 
 Omit `promo_code` to create an order without a discount.
 
-## PostgreSQL with Docker
+## Architecture
 
-PostgreSQL is recommended when checking concurrent promo redemptions because
-SQLite does not implement row-level `SELECT FOR UPDATE` locking.
-
-```bash
-docker compose up --build --wait
-docker compose exec web python manage.py seed_demo
+```text
+config/                  Django settings and URL configuration
+orders/
+├── models.py            Domain entities and database constraints
+├── serializers.py       Request validation and response contract
+├── services.py          Transactional order creation use case
+├── views.py             Thin HTTP adapter
+├── admin.py             Readable operational interface
+├── management/commands/ Deterministic demo data
+└── tests/                API and model validation scenarios
 ```
 
-The container is exposed at `http://127.0.0.1:8015` by default. Set
-`APP_PORT=8000` (or another free port) before `docker compose up` to override it.
+The view handles HTTP concerns, serializers validate the external contract, and the
+service owns the transaction and business operation. Models preserve historical
+order values and enforce invariants that must hold regardless of the caller.
 
-## Tests and static checks
+## Consistency under concurrency
 
-```bash
-uv run pytest
-uv run ruff check .
-uv run mypy config orders
+Order creation runs inside `transaction.atomic()`. The promo row is selected with
+`select_for_update()` before the current redemption count is checked. Requests
+competing for the last available redemption therefore serialize on PostgreSQL.
+
+A unique `(promo_code, user)` constraint provides a second line of defense against
+repeated redemption. Product values are also read under a lock and copied into
+`OrderItem`, so an order retains the exact name, price and discount used at creation.
+
+SQLite is convenient for a quick local check, but PostgreSQL should be used when
+evaluating row-level locking behavior.
+
+## Discount behavior
+
+| Product | Promo scope | Applied rate |
+|---|---|---:|
+| Promotions allowed | All categories | Promo rate |
+| Promotions allowed | Matching category | Promo rate |
+| Promotions allowed | Different category | `0` |
+| Promotions excluded | Any promo | `0` |
+
+For mixed orders, the response exposes the promo rate at order level and the actual
+applied rate for each item. If every item is ineligible, the promo is rejected.
+
+## Error contract
+
+Business validation failures return HTTP 400 with a stable code suitable for a
+frontend or API client:
+
+```json
+{
+  "promo_code": [
+    {
+      "message": "Срок действия промокода истёк.",
+      "code": "promo_expired"
+    }
+  ]
+}
 ```
 
-Or run all checks:
+Other promo error codes cover missing, inactive, future, exhausted, previously used
+and inapplicable codes. User, product and request-shape errors use the same field-led
+response style.
+
+## Quality checks
 
 ```bash
 make check
 ```
 
-## Design notes
+This runs:
 
-### Transactional promo redemption
-
-Order creation runs inside `transaction.atomic()`. If a promo code is supplied,
-its row is selected with `select_for_update()` before checking the redemption
-count and creating the order. Concurrent requests for the last available use are
-therefore serialized on PostgreSQL. The unique `(promo_code, user)` constraint is
-the final guard against repeated redemption by the same user.
-
-### Price snapshots
-
-`OrderItem` stores the product name, unit price, discount rate, subtotal and final
-total used when the order was created. Later product or promo changes do not
-rewrite historical orders.
-
-### Category and excluded products
-
-A category-limited promo discounts matching products only. Products from other
-categories remain in the order at full price. `promotions_allowed=False` always
-wins. If no order item is eligible, the API rejects the supplied promo instead of
-silently accepting an ineffective code.
-
-### API errors
-
-Business validation errors use HTTP 400 and include a stable machine-readable
-code, for example:
-
-```json
-{
-  "promo_code": [
-    {"message": "Срок действия промокода истёк.", "code": "promo_expired"}
-  ]
-}
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy config orders
+uv run pytest
 ```
+
+GitHub Actions executes the same checks on Python 3.10 and 3.12.
 
 ## Assumptions
 
-- authentication is outside the assignment, so `user_id` is accepted explicitly;
-- a request may contain at most 100 distinct product lines;
-- a promo code must discount at least one item to be accepted;
-- order-level `discount` contains the promo rate while every item contains its
-  actual applied rate;
-- inventory reservation and payment processing are outside this endpoint.
+- Authentication is outside the task scope, so the request accepts `user_id`.
+- One order may contain at most 100 distinct product lines.
+- Percentage values are whole numbers from 1 through 100 and are returned as rates.
+- Inventory reservation and payment processing are outside this endpoint.
+
+## License
+
+Distributed under the [MIT License](LICENSE).
