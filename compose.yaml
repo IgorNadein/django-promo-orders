@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: promo_orders
+      POSTGRES_USER: promo_orders
+      POSTGRES_PASSWORD: promo_orders
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U promo_orders -d promo_orders"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    environment:
+      DJANGO_SECRET_KEY: local-docker-key
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      POSTGRES_DB: promo_orders
+      POSTGRES_USER: promo_orders
+      POSTGRES_PASSWORD: promo_orders
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    ports:
+      - "${APP_PORT:-8015}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s = socket.create_connection(('127.0.0.1', 8000), 2); s.close()"
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+volumes:
+  postgres_data:

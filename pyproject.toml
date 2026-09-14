@@ -1,0 +1,46 @@
+[project]
+name = "jetlend-promo-orders"
+version = "0.1.0"
+description = "Production-style Django API for creating orders with promotional codes"
+requires-python = ">=3.10"
+dependencies = [
+    "Django>=5.2,<5.3",
+    "djangorestframework>=3.16,<3.17",
+    "gunicorn>=23,<24",
+    "psycopg[binary]>=3.2,<3.4",
+]
+
+[dependency-groups]
+dev = [
+    "django-stubs>=5.2,<5.3",
+    "djangorestframework-stubs>=3.16,<3.17",
+    "mypy>=1.18,<2",
+    "pytest>=8.4,<10",
+    "pytest-django>=4.11,<5",
+    "ruff>=0.13,<1",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = ["orders/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+exclude = ["orders/migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
