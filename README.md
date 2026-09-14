@@ -4,6 +4,8 @@
 
 **A transaction-safe REST API for creating orders and redeeming percentage promo codes.**
 
+**English** · [Русский](README.ru.md)
+
 [![CI](https://github.com/IgorNadein/django-promo-orders/actions/workflows/ci.yml/badge.svg)](https://github.com/IgorNadein/django-promo-orders/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/IgorNadein/django-promo-orders)](https://github.com/IgorNadein/django-promo-orders/releases)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
